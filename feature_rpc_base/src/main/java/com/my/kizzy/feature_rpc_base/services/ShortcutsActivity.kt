@@ -17,6 +17,7 @@ import android.content.Intent
 import android.os.Build.VERSION.SDK_INT
 import android.os.Bundle
 import android.widget.Toast
+import com.my.kizzy.preference.Prefs
 import com.my.kizzy.resources.R
 
 class ShortcutsActivity : Activity() {
@@ -62,10 +63,34 @@ class ShortcutsActivity : Activity() {
                     ).show()
                 }
 
+                Intents.START_CUSTOM_RPC_SHORTCUT -> {
+                    stopService(Intent(this, AppDetectionService::class.java))
+                    stopService(Intent(this, MediaRpcService::class.java))
+                    stopService(Intent(this, ExperimentalRpc::class.java))
+                    stopService(Intent(this, CustomRpcService::class.java))
+
+                    // Re-use the config saved by the last "ON" press in Custom RPC
+                    val lastRpc = Prefs[Prefs.LAST_RUN_CUSTOM_RPC, ""]
+                    if (lastRpc.isNotEmpty()) {
+                        startService(
+                            Intent(this, CustomRpcService::class.java).putExtra("RPC", lastRpc)
+                        )
+                        Toast.makeText(
+                            this, getString(R.string.custom_rpc_running), Toast.LENGTH_SHORT
+                        ).show()
+                    } else {
+                        Toast.makeText(
+                            this, "No saved Custom RPC config. Start it once in the app.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+
                 Intents.STOP_RPC -> {
                     stopService(Intent(this, AppDetectionService::class.java))
                     stopService(Intent(this, MediaRpcService::class.java))
                     stopService(Intent(this, ExperimentalRpc::class.java))
+                    stopService(Intent(this, CustomRpcService::class.java))
 
                     Toast.makeText(this, getString(R.string.stop_rpc_toast), Toast.LENGTH_SHORT)
                         .show()
@@ -85,6 +110,7 @@ class ShortcutsActivity : Activity() {
             val START_MEDIA_RPC_SHORTCUT = "com.my.kizzy.intent.action.START_MEDIA_RPC"
             val START_EXPERIMENTAL_RPC_SHORTCUT =
                 "com.my.kizzy.intent.action.START_EXPERIMENTAL_RPC"
+            val START_CUSTOM_RPC_SHORTCUT = "com.my.kizzy.intent.action.START_CUSTOM_RPC"
             val STOP_RPC = "com.my.kizzy.intent.action.STOP_RPC"
         }
     }
