@@ -77,6 +77,16 @@ index 7613029..4c9a5ae 100644
 +        )
 +    }
 +}
+diff --git a/common/resources/src/main/res/values/strings.xml b/common/resources/src/main/res/values/strings.xml
+index 9e93c5d..90d741d 100644
+--- a/common/resources/src/main/res/values/strings.xml
++++ b/common/resources/src/main/res/values/strings.xml
+@@ -219,4 +219,5 @@
+     <string name="set_imgur_client_id">Set Imgur Client ID</string>
+     <string name="set_imgur_client_id_desc">If images aren\'t showing using Imgur, you can try setting your own Client ID</string>
+     <string name="show_song_as_title">Show Song as Title</string>
++    <string name="live_update_interval">Live update interval in seconds (5 to 300, empty = 15)</string>
+ </resources>
 diff --git a/data/src/main/java/com/my/kizzy/data/rpc/KizzyRPC.kt b/data/src/main/java/com/my/kizzy/data/rpc/KizzyRPC.kt
 index fc46f95..75de545 100644
 --- a/data/src/main/java/com/my/kizzy/data/rpc/KizzyRPC.kt
@@ -116,8 +126,20 @@ index fc46f95..75de545 100644
 +        discordWebSocket.sendActivity(updated)
 +    }
  }
+diff --git a/domain/src/main/java/com/my/kizzy/domain/model/rpc/RpcConfig.kt b/domain/src/main/java/com/my/kizzy/domain/model/rpc/RpcConfig.kt
+index def218a..aec683b 100644
+--- a/domain/src/main/java/com/my/kizzy/domain/model/rpc/RpcConfig.kt
++++ b/domain/src/main/java/com/my/kizzy/domain/model/rpc/RpcConfig.kt
+@@ -56,4 +56,6 @@ data class RpcConfig(
+     val partyMaxSize: String = "",
+     @SerialName("platform")
+     val platform: String = "",
++    @SerialName("live_interval")
++    val liveInterval: String = "",
+ )
+\ No newline at end of file
 diff --git a/feature_custom_rpc/src/main/java/com/my/kizzy/feature_custom_rpc/CustomRpc.kt b/feature_custom_rpc/src/main/java/com/my/kizzy/feature_custom_rpc/CustomRpc.kt
-index 678fe3a..55d6eba 100644
+index 678fe3a..9355338 100644
 --- a/feature_custom_rpc/src/main/java/com/my/kizzy/feature_custom_rpc/CustomRpc.kt
 +++ b/feature_custom_rpc/src/main/java/com/my/kizzy/feature_custom_rpc/CustomRpc.kt
 @@ -248,7 +248,7 @@ private fun RpcTextFieldsColumn(
@@ -167,6 +189,26 @@ index 678fe3a..55d6eba 100644
                      ) {
                          onEvent(UiEvent.SetFieldsFromConfig(uiState.rpcConfig.copy(smallText = it)))
                      }
+@@ -663,6 +665,19 @@ private fun RpcTextFieldsColumn(
+                     }
+                 }
+             }
++            item {
++                val usesLive = listOf(name, details, state, largeText, smallText)
++                    .any { it.contains("{speed}") || it.contains("{rpm}") }
++                AnimatedVisibility(visible = usesLive) {
++                    RpcField(
++                        value = liveInterval,
++                        label = R.string.live_update_interval,
++                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
++                    ) {
++                        onEvent(UiEvent.SetFieldsFromConfig(uiState.rpcConfig.copy(liveInterval = it.filter { c -> c.isDigit() })))
++                    }
++                }
++            }
+             item {
+                 AnimatedVisibility(visible = type == "1") {
+                     val streamUrlInfoText = stringResource(id = R.string.stream_url_info)
 diff --git a/feature_rpc_base/build.gradle.kts b/feature_rpc_base/build.gradle.kts
 index b059471..d99e7cf 100644
 --- a/feature_rpc_base/build.gradle.kts
@@ -654,7 +696,7 @@ index 0000000..fe0cb9a
 + }
 \ No newline at end of file
 diff --git a/feature_rpc_base/src/main/java/com/my/kizzy/feature_rpc_base/services/CustomRpcService.kt b/feature_rpc_base/src/main/java/com/my/kizzy/feature_rpc_base/services/CustomRpcService.kt
-index 3e2f392..5cbcc2b 100644
+index 3e2f392..e81dce9 100644
 --- a/feature_rpc_base/src/main/java/com/my/kizzy/feature_rpc_base/services/CustomRpcService.kt
 +++ b/feature_rpc_base/src/main/java/com/my/kizzy/feature_rpc_base/services/CustomRpcService.kt
 @@ -27,8 +27,13 @@ import com.my.kizzy.feature_rpc_base.setLargeIcon
@@ -690,7 +732,7 @@ index 3e2f392..5cbcc2b 100644
  
              val stopIntent = Intent(this, CustomRpcService::class.java)
              stopIntent.action = Constants.ACTION_STOP_SERVICE
-@@ -114,11 +124,43 @@ class CustomRpcService : Service() {
+@@ -114,11 +124,46 @@ class CustomRpcService : Service() {
                      }
                  }
              }
@@ -703,10 +745,13 @@ index 3e2f392..5cbcc2b 100644
 +                    val reader = TorqueReader(this)
 +                    torqueReader = reader
 +                    reader.bind()
++                    // Discord allows roughly 5 presence updates per 20 seconds, so never go below 5s
++                    val intervalMs = (cfg.liveInterval.toLongOrNull()?.coerceIn(5L, 300L)?.times(1000L)
++                        ?: LIVE_INTERVAL_MS)
 +                    liveJob = scope.launch {
 +                        var lastSent = ""
 +                        while (isActive) {
-+                            delay(LIVE_INTERVAL_MS)
++                            delay(intervalMs)
 +                            val (speed, rpm) = withContext(Dispatchers.IO) { reader.read() }
 +                            val live = LiveTemplate.resolveConfig(cfg, speed, rpm)
 +                            val key = listOf(live.name, live.details, live.state, live.largeText, live.smallText).joinToString("|")
@@ -734,7 +779,7 @@ index 3e2f392..5cbcc2b 100644
          scope.cancel()
          kizzyRPC.closeRPC()
          wakeLock?.let {
-@@ -133,5 +175,7 @@ class CustomRpcService : Service() {
+@@ -133,5 +178,7 @@ class CustomRpcService : Service() {
  
      companion object {
          const val WAKELOCK = "kizzy:CustomRPC"
