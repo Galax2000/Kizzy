@@ -85,7 +85,7 @@ index 9e93c5d..90d741d 100644
      <string name="set_imgur_client_id">Set Imgur Client ID</string>
      <string name="set_imgur_client_id_desc">If images aren\'t showing using Imgur, you can try setting your own Client ID</string>
      <string name="show_song_as_title">Show Song as Title</string>
-+    <string name="live_update_interval">Live update interval in seconds (5 to 300, empty = 15)</string>
++    <string name="live_update_interval">Live update interval in seconds (1 to 300, empty = 15)</string>
  </resources>
 diff --git a/data/src/main/java/com/my/kizzy/data/rpc/KizzyRPC.kt b/data/src/main/java/com/my/kizzy/data/rpc/KizzyRPC.kt
 index fc46f95..75de545 100644
@@ -746,7 +746,7 @@ index 3e2f392..e81dce9 100644
 +                    torqueReader = reader
 +                    reader.bind()
 +                    // Discord allows roughly 5 presence updates per 20 seconds, so never go below 5s
-+                    val intervalMs = (cfg.liveInterval.toLongOrNull()?.coerceIn(5L, 300L)?.times(1000L)
++                    val intervalMs = (cfg.liveInterval.toLongOrNull()?.coerceIn(1L, 300L)?.times(1000L)
 +                        ?: LIVE_INTERVAL_MS)
 +                    liveJob = scope.launch {
 +                        var lastSent = ""
