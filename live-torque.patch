@@ -1,0 +1,843 @@
+diff --git a/common/components/src/main/java/com/my/kizzy/ui/components/RpcField.kt b/common/components/src/main/java/com/my/kizzy/ui/components/RpcField.kt
+index 7613029..4c9a5ae 100644
+--- a/common/components/src/main/java/com/my/kizzy/ui/components/RpcField.kt
++++ b/common/components/src/main/java/com/my/kizzy/ui/components/RpcField.kt
+@@ -18,6 +18,16 @@ import androidx.compose.foundation.layout.Column
+ import androidx.compose.foundation.layout.fillMaxWidth
+ import androidx.compose.foundation.layout.padding
+ import androidx.compose.foundation.text.KeyboardOptions
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.filled.ArrowDropDown
++import androidx.compose.material3.DropdownMenu
++import androidx.compose.material3.DropdownMenuItem
++import androidx.compose.material3.Icon
++import androidx.compose.material3.IconButton
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
+ import androidx.compose.material3.ExperimentalMaterial3Api
+ import androidx.compose.material3.MaterialTheme
+ import androidx.compose.material3.Text
+@@ -39,9 +49,11 @@ fun RpcField(
+     isError: Boolean = false,
+     errorMessage: String = "",
+     keyboardOptions: KeyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
++    liveValues: Boolean = false,
+     content: @Composable (() -> Unit) = {},
+     onValueChange: (String) -> Unit = {}
+ ) {
++    val liveMenu: @Composable () -> Unit = { LiveValueMenu(value, onValueChange) }
+     Column(
+         modifier = Modifier
+             .fillMaxWidth()
+@@ -56,7 +68,7 @@ fun RpcField(
+             enabled = enabled,
+             label = { Text(stringResource(id = label)) },
+             keyboardOptions = keyboardOptions,
+-            trailingIcon = trailingIcon,
++            trailingIcon = trailingIcon ?: (if (liveValues) liveMenu else null),
+             isError = isError
+         )
+         AnimatedVisibility(visible = isError) {
+@@ -70,4 +82,34 @@ fun RpcField(
+         }
+         content()
+     }
+-}
+\ No newline at end of file
++}
++
++/** Dropdown to switch a field between your own text and live values from Torque. */
++@Composable
++private fun LiveValueMenu(value: String, onValueChange: (String) -> Unit) {
++    var expanded by remember { mutableStateOf(false) }
++
++    fun append(token: String) {
++        onValueChange(if (value.isEmpty()) token else "$value $token")
++        expanded = false
++    }
++
++    IconButton(onClick = { expanded = true }) {
++        Icon(imageVector = Icons.Filled.ArrowDropDown, contentDescription = "Live values")
++    }
++    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
++        DropdownMenuItem(
++            text = { Text("Custom text (clear field)") },
++            onClick = {
++                onValueChange("")
++                expanded = false
++            }
++        )
++        DropdownMenuItem(text = { Text("Live speed") }, onClick = { append("{speed}") })
++        DropdownMenuItem(text = { Text("Live RPM") }, onClick = { append("{rpm}") })
++        DropdownMenuItem(
++            text = { Text("Live speed + RPM") },
++            onClick = { append("{speed} km/h \u00b7 {rpm} rpm") }
++        )
++    }
++}
+diff --git a/data/src/main/java/com/my/kizzy/data/rpc/KizzyRPC.kt b/data/src/main/java/com/my/kizzy/data/rpc/KizzyRPC.kt
+index fc46f95..75de545 100644
+--- a/data/src/main/java/com/my/kizzy/data/rpc/KizzyRPC.kt
++++ b/data/src/main/java/com/my/kizzy/data/rpc/KizzyRPC.kt
+@@ -345,4 +345,34 @@ class KizzyRPC(
+             )
+         )
+     }
++
++    /**
++     * Re-sends the running presence with new text values only.
++     * Images, buttons, timestamps and the rest stay exactly as they were built.
++     */
++    suspend fun updateLiveText(
++        name: String?,
++        details: String?,
++        state: String?,
++        largeText: String?,
++        smallText: String?
++    ) {
++        if (!::presence.isInitialized || !discordWebSocket.isActive) return
++        val current = presence.activities?.firstOrNull() ?: return
++        val updated = presence.copy(
++            activities = listOf(
++                current.copy(
++                    name = name ?: current.name,
++                    details = details?.takeIf { it.isNotEmpty() }?.sanitize(),
++                    state = state?.takeIf { it.isNotEmpty() }?.sanitize(),
++                    assets = current.assets?.copy(
++                        largeText = largeText?.takeIf { it.isNotEmpty() }?.sanitize(),
++                        smallText = smallText?.takeIf { it.isNotEmpty() }?.sanitize()
++                    )
++                )
++            )
++        )
++        presence = updated
++        discordWebSocket.sendActivity(updated)
++    }
+ }
+diff --git a/feature_custom_rpc/src/main/java/com/my/kizzy/feature_custom_rpc/CustomRpc.kt b/feature_custom_rpc/src/main/java/com/my/kizzy/feature_custom_rpc/CustomRpc.kt
+index 678fe3a..55d6eba 100644
+--- a/feature_custom_rpc/src/main/java/com/my/kizzy/feature_custom_rpc/CustomRpc.kt
++++ b/feature_custom_rpc/src/main/java/com/my/kizzy/feature_custom_rpc/CustomRpc.kt
+@@ -248,7 +248,7 @@ private fun RpcTextFieldsColumn(
+         with(uiState.rpcConfig) {
+             item {
+                 RpcField(
+-                    value = name, label = R.string.activity_name
++                    value = name, label = R.string.activity_name, liveValues = true
+                 ) {
+                     onEvent(UiEvent.SetFieldsFromConfig(uiState.rpcConfig.copy(name = it)))
+                 }
+@@ -256,7 +256,7 @@ private fun RpcTextFieldsColumn(
+ 
+             item {
+                 RpcField(
+-                    value = details, label = R.string.activity_details
++                    value = details, label = R.string.activity_details, liveValues = true
+                 ) {
+                     onEvent(UiEvent.SetFieldsFromConfig(uiState.rpcConfig.copy(details = it)))
+                 }
+@@ -264,7 +264,7 @@ private fun RpcTextFieldsColumn(
+ 
+             item {
+                 RpcField(
+-                    value = state, label = R.string.activity_state
++                    value = state, label = R.string.activity_state, liveValues = true
+                 ) {
+                     onEvent(UiEvent.SetFieldsFromConfig(uiState.rpcConfig.copy(state = it)))
+                 }
+@@ -573,7 +573,8 @@ private fun RpcTextFieldsColumn(
+                 AnimatedVisibility(visible = largeImg.isNotBlank()) {
+                     RpcField(
+                         value = largeText,
+-                        label = R.string.activity_large_text
++                        label = R.string.activity_large_text,
++                        liveValues = true
+                     ) {
+                         onEvent(UiEvent.SetFieldsFromConfig(uiState.rpcConfig.copy(largeText = it)))
+                     }
+@@ -618,7 +619,8 @@ private fun RpcTextFieldsColumn(
+                 AnimatedVisibility(visible = smallImg.isNotBlank()) {
+                     RpcField(
+                         value = smallText,
+-                        label = R.string.activity_small_text
++                        label = R.string.activity_small_text,
++                        liveValues = true
+                     ) {
+                         onEvent(UiEvent.SetFieldsFromConfig(uiState.rpcConfig.copy(smallText = it)))
+                     }
+diff --git a/feature_rpc_base/build.gradle.kts b/feature_rpc_base/build.gradle.kts
+index b059471..d99e7cf 100644
+--- a/feature_rpc_base/build.gradle.kts
++++ b/feature_rpc_base/build.gradle.kts
+@@ -6,6 +6,10 @@ plugins {
+ 
+ android {
+     namespace = "com.my.kizzy.feature_rpc_base"
++
++    buildFeatures {
++        aidl = true
++    }
+ }
+ 
+ dependencies {
+diff --git a/feature_rpc_base/src/main/aidl/org/prowl/torque/remote/ITorqueService.aidl b/feature_rpc_base/src/main/aidl/org/prowl/torque/remote/ITorqueService.aidl
+new file mode 100644
+index 0000000..fe0cb9a
+--- /dev/null
++++ b/feature_rpc_base/src/main/aidl/org/prowl/torque/remote/ITorqueService.aidl
+@@ -0,0 +1,464 @@
++package org.prowl.torque.remote;
++
++interface ITorqueService {
++
++   /**
++    * Get the API version. The version will increment each time the API is revised.
++    */
++   int getVersion();
++
++   /**
++    * Get the most recent value stored for the given PID.  This will return immediately whether or not data exists.
++    * @param triggersDataRefresh Cause the data to be re-requested from the ECU
++    * @note If the PID returns multiple values(has multiple displays setup for the same PID), then this call will return the data for the first matching PID
++    * @deprecated  See getPIDInformation(...), listAllPIDs(), getPIDValues(...) and listActivePIDs() which replaces this call and can handle sensors with the same 'PID'   
++    */
++   float getValueForPid(long pid, boolean triggersDataRefresh);
++
++   /**
++    * Get a textual, long description regarding the PID, already translated (when translation is implemented)
++    * @note If the PID returns multiple values(has multiple displays setup for the same PID), then this call will return the data for the first matching PID
++    * @deprecated  See getPIDInformation(...), listAllPIDs(), getPIDValues(...) and listActivePIDs() which replaces this call and can handle sensors with the same 'PID'   
++    */
++   String getDescriptionForPid(long pid);
++   
++   /**
++    * Get the shortname of the PID
++    * @note If the PID returns multiple values, then this call will return the data for the first matching PID
++    * @deprecated  See getPIDInformation(...), listAllPIDs(), getPIDValues(...) and listActivePIDs() which replaces this call and can handle sensors with the same 'PID'   
++    */
++   String getShortNameForPid(long pid);
++
++   /**
++    * Get the Si unit in string form for the PID, if no Si unit is available, a textual-description is returned instead.
++    * @note If the PID returns multiple values(has multiple displays setup for the same PID), then this call will return the data for the first matching PID
++    * @deprecated  See getPIDInformation(...), listAllPIDs(), getPIDValues(...) and listActivePIDs() which replaces this call and can handle sensors with the same 'PID'   
++    */
++   String getUnitForPid(long pid);
++   
++   /**
++    * Get the minimum value expected for this PID
++    * @note If the PID returns multiple values(has multiple displays setup for the same PID), then this call will return the data for the first matching PID
++    * @deprecated  See getPIDInformation(...), listAllPIDs(), getPIDValues(...) and listActivePIDs() which replaces this call and can handle sensors with the same 'PID'   
++    */
++   float getMinValueForPid(long pid);
++   
++   /**
++    * Get the maximum value expected for this PId
++    * @note If the PID returns multiple values(has multiple displays setup for the same PID), then this call will return the data for the first matching PID
++    * @deprecated  See getPIDInformation(...), listAllPIDs(), getPIDValues(...) and listActivePIDs() which replaces this call and can handle sensors with the same 'PID'   
++    */
++   float getMaxValueForPid(long pid);
++   
++   /**
++    * Returns a list of currently 'active' PIDs. This list will change often. Try not to call this method too frequently.
++    *
++    * PIDs are stored as hex values, so '0x01, 0x0D' (vehicle speed) is the equivalent:  Integer.parseInt("010D",16);
++    * @note If the PID returns multiple values(has multiple displays setup for the same PID), then this call will return the data for the first matching PID
++    * @deprecated  See getPIDInformation(...), listAllPIDs(), getPIDValues(...) and listActivePIDs() which replaces this call and can handle sensors with the same 'PID'   
++    */
++   long[] getListOfActivePids();
++   
++   /**
++    * Returns a list of PIDs that have been reported by the ECU as supported.
++    *
++    * PIDs are stored as hex values, so '0x01, 0x0D' (vehicle speed) is the equivalent:  Integer.parseInt("010D",16);
++    * @note If the PID returns multiple values(has multiple displays setup for the same PID), then this call will return the data for the first matching PID
++    * @deprecated  See getPIDInformation(...), listAllPIDs(), getPIDValues(...) and listActivePIDs() which replaces this call and can handle sensors with the same 'PID'   
++    */
++   long[] getListOfECUSupportedPids();
++   
++   /**
++    * Returns a list of all the known available sensors, active or inactive.
++    * 
++    * Try not to call this method too frequently.
++    *
++    * PIDs are stored as hex values, so '0x01, 0x0D' (vehicle speed) is the equivalent:  Integer.parseInt("010D",16);
++    * @note If the PID returns multiple values(has multiple displays setup for the same PID), then this call will return the data for the first matching PID
++    * @deprecated  See getPIDInformation(...), getPIDValues(...)  and listAllPIDs() which replaces this call and can handle sensors with the same 'PID'
++    */
++   long[] getListOfAllPids();
++   
++   /**
++    * True if the user has granted full permissions to the plugin (to send anything that it wants)
++    */
++   boolean hasFullPermissions();
++   
++   /**
++    * Send a specific request over the OBD bus and return the response as a string
++    *
++    * This is currently limited by the 'Allow full permissions' option in the settings.
++    *
++    * Modes 01,02,03,07,09,0a,21,22 and 23 are permitted. Permission needs to be granted in the
++    * app settings for any other modes.
++    */
++   String[] sendCommandGetResponse(String header, String command);
++
++  /**
++   * Given this unit, get the users preferred units
++   */
++   String getPreferredUnit(String unit);
++
++   /**
++    * Add / Update a PID from your plugin to the main app, Your PID is keyed by name.
++    *
++    * @deprecated - (see below)superceded by setPIDInformation(String name, String shortName, String unit, float max, float min, float value, String stringValue);
++    */
++   boolean setPIDData(String name, String shortName, String unit, float max, float min, float value);
++
++   /**
++    * Get connection state to ECU
++    * @return true if connected to the ECU, false if the app has not yet started retrieving data from the ECU
++    */
++    boolean isConnectedToECU();
++
++   /**
++    * Turn on or off test mode. This is for debugging only and simulates readings to some of the sensors.
++    */
++   boolean setDebugTestMode(boolean activateTestMode);
++
++   /**
++    * Returns a string array containing the vehicle profile information:
++    *
++    *  Array:
++    *     [0] Profile name
++    *     [1] Engine Displacement (L)
++    *     [2] Weight in kilogrammes
++    *     [3] Fuel type (0 = Petrol, 1 = Diesel, 2 = E85 (Ethanol/Petrol)    *     [4] Boost adjustment
++    *     [5] Max RPM setting
++    *     [6] Volumetric efficiency (%)
++    *     [7] Accumulated distance travelled
++    */
++   String[] getVehicleProfileInformation();
++
++   /**
++    * Store some information into the vehicle profile.
++    *
++    * @param key  Prefix the 'key' with your apps classpath (to avoid conflicts). eg: "com.company.pluginname.SOME_KEY_NAME" is nice and clear  (Don't use any characters other than A-Za-z0-9 . and _)
++    * @param The value to store.
++    * @param saveToFile Set this to true (on your last 'set') to commit the information to disk.
++    * @return 0 if successful.
++    */
++    int storeInProfile(String key, String value, boolean saveToFileNow);
++
++
++   /**
++    * Retrieve some information from the vehicle profile.
++    *
++    * @param Prefix the 'key' with your apps classpath (to avoid conflicts).
++    */
++    String retrieveProfileData(String key);
++
++    /**
++     * Retrieve the number of errors that Torque has seen happen at the adapter
++     *
++     * Generally speaking, if this is above 0, then you have problems at the adapter side.
++     */
++    int getDataErrorCount();
++
++    /**
++     * Get max PID read speed in PIDs read per second
++     *
++     * This is reset each connection to the adpater.
++     */
++    double getPIDReadSpeed();
++
++
++    /**
++     * Gets the configured communications speed
++     *
++     *  1 == slowest (for problematic adapters)
++     *  2 == standard (The app default)
++     *  3 == fast mode (selectable in the OBD2 adapter settings)
++     *
++     * Fast mode provides a significant speed increase on some vehicles for the read speed of sensor information
++     */
++    int getConfiguredSpeed();
++
++    /**
++     * returns true if the user is currently logging data to the file
++     */
++    boolean isFileLoggingEnabled();
++
++
++    /**
++     * returns true if the user is currently logging data to web
++     */
++    boolean isWebLoggingEnabled();
++
++    /**
++     * returns the number of items that are configured to be logged to file. The more items configured to log (and with logging enabled), the slower the refresh rate of individual PIDs.
++     */
++    int getNumberOfLoggedItems();
++
++  /**
++    * Get the time that the PID was last updated.
++    *
++    * @note If the PID returns multiple values(has multiple displays setup for the same PID), then this call will return the data for the first matching PID
++    */
++   long getUpdateTimeForPID(long pid);
++
++   /**
++    * Returns the scale of the requested PID
++    * @note If the PID returns multiple values(has multiple displays setup for the same PID), then this call will return the data for the first matching PID
++    */
++   float getScaleForPid(long pid);
++
++   /**
++    * Translate a string that *might* be in translation file in the main Torque app. Do not call this method repeatedly for the same text!
++    */
++    String translate(String originalText);
++
++   /**
++    * Method to send PID data in raw form.
++    *  Name, ShortName, ModeAndPID, Equation, Min, Max, Units, Header
++    * @deprecated - see sendPIDDataV2 (which allows diagnostic headers to be set, or left as null)
++    */
++   boolean sendPIDData(String pluginName, in String[] name, in String[] shortName, in String[] modeAndPID, in String[] equation, in float[] minValue, in float[] maxValue, in String[] units, in String[] header);
++
++   /**
++    * Add / Update a PID from your plugin to the main app, Your PID is keyed by name.  This can be used to set a value on a PID in Torque.
++    *
++    * @param value       The value to be shown in the display
++    * @param stringValue A string value to be shown in the display - overrides 'value' when not null - note(try not to use numeric values here as they won't be unit converted for you).  Set to null to revert to using the 'float value'
++    */
++   boolean setPIDInformation(String name, String shortName, String unit, float max, float min, float value, String stringValue);
++
++   /**
++    * Get a list of all PIDs in torque, active or inactive.
++    *
++    * The returned string is the ID of the PID to request over the aidl script.  To be helpful the first part of this string is the actual PID 'id'.
++    * @note (don't call this too often as it is computationally expensive!)
++    */
++    String[] listAllPIDs();
++
++   /**
++    * List all only the active PIDs
++    *
++    * The returned string is the ID of the PID to request over the aidl script.  To be helpful the first part of this string is the actual PID 'id'.
++    * @note (don't call this too often as it is computationally expensive!)
++    */
++    String[] listActivePIDs();
++
++   /**
++    * List all only the active PIDs
++    *
++    * The returned string is the ID of the PID to request over the aidl script.  To be helpful the first part of this string is the actual PID 'id'.
++    * @note (don't call this too often as it is computationally expensive!)
++    */
++    String[] listECUSupportedPIDs();
++
++    /**
++     * Return the current value only for the PID (or PIDs if you pass more than one)
++     *
++     * Use this method to frequently get the value of PID(s).  Be aware that the more PIDs you request, the slower the update speed (as the OBD2 adapter will require to update more PIDs and this is the choke-point)
++     * This method is asynchronous updates via the adapter
++     *
++     * @deprecated please use getPIDValuesAsDouble(...) instead
++     */
++    float[] getPIDValues(in String[] pidsToRetrieve);
++
++   /**
++    * Return all the PID information in a single transaction. This is the new preferred method to get data from PIDs
++    *
++    * The unit returned is the raw unit (used for getPIDValues) - you can get the users preferred unit by using the relevant API call
++    *
++    * Format of returned string array:
++    *  String[] {
++    *       String "pid information in csv format"
++    *       String "pid information in csv format"
++    *       ...(etc)
++    *    }
++    *
++    *  Example:
++    *
++    *   String[] {
++    *      "<longName>,<shortName>,<unit>,<maxValue>,<minValue>,<scale>",
++    *      "Intake Manifold Pressure,Intake,kPa,255,0,1",
++    *      "Accelerator Pedal Position E,Accel(E),%,100,0,1"
++    *   }
++    */
++   String[] getPIDInformation(in String[] pidIDs);
++
++   /**
++    * Get the time that the PID was last updated.
++    *
++    * @returns time when the PID value was retrieved via OBD/etc in milliseconds
++    */
++   long[] getPIDUpdateTime(in String[] pidIDs);
++
++   /**
++    * Retrieves a list of PID values
++    *
++    * @deprecated See getPIDInformation(...), listAllPIDs(), getPIDValues(...) and listActivePIDs() which replaces this call and can handle sensors with the same 'PID'
++    **/
++   float[] getValueForPids(in long[] pids);
++
++   /**
++    * Method to send PID data in raw form - this is for when pid plugin vendors want to protect their hard work when they have decyphed or licensed PIDs
++    * Name, ShortName, ModeAndPID, Equation, Min, Max, Units, Header
++    * @deprecated - see sendPIDDataPrivateV2 (which allows diagnostic headers to be set, or left as null)
++    */
++   boolean sendPIDDataPrivate(String pluginName, in String[] name, in String[] shortName, in String[] modeAndPID, in String[] equation, in float[] minValue, in float[] maxValue, in String[] units, in String[] header);
++
++   /**
++    * Cause Torque to stop communicating with the adpter so external plugins can take full control
++    *
++    * This is when you want to do special things like reconfigure the adpater to talk to special units (ABS, SRS, Body control, etc)
++    * which may require torque to stay away from asking information from the adpater
++    *
++    * @return an int depicting the state of the lock
++    *
++    *   0 = Lock gained OK - you now have exclusive access
++    *  -1 = Lock failed due to unknown reason
++    *  -2 = Lock failed due to another lock already being present (from your, or another plugin)
++    *  -3 = Lock failed due to not being connected to adapter
++    *  -4 = reserved - you still didn't get a lock.
++    *  -5 = No permissions to access in this manner (enable the ticky-box in the plugin settings for 'full access')
++    *  -6 = Lock failed due to timeout trying to get a lock (10 second limit hit)
++    */
++   int requestExclusiveLock(String pluginName);
++
++   /**
++    * Release the exclusive lock the plugin has with the adapter.
++    *
++    * @param torqueMustReInitializeTheAdapter set this to TRUE if torque must reinit comms with the vehicle ECU to continue communicating - if it is set to FALSE, then torque will simply continue trying to talk to the ECU. Take special care to ensure the adpater is in the proper state to do this
++    *
++    */
++   boolean releaseExclusiveLock(String pluginName, boolean torqueMustReInitializeTheAdapter);
++
++   /**
++    * Method to send PID data in raw form.
++    * This updated method allows diagnostic headers to be set if required (for special commands) or left as null.
++    *  Name, ShortName, ModeAndPID, Equation, Min, Max, Units, Header,Start diagnostic command, Stop diagnostic command
++    */
++   boolean sendPIDDataV2(String pluginName, in String[] name, in String[] shortName, in String[] modeAndPID, in String[] equation, in float[] minValue, in float[] maxValue, in String[] units, in String[] header, in String[] startDiagnostic, in String[] stopDiagnostic);
++
++
++   /**
++    * Method to send PID data in raw form - this is for when pid plugin vendors want to protect their hard work when they have decyphed or licensed PIDs
++    * This updated method allows diagnostic headers to be set if required (for special commands) or left as null.
++    * Name, ShortName, ModeAndPID, Equation, Min, Max, Units, Header, Start diagnostic command, Stop diagnostic command
++    */
++   boolean sendPIDDataPrivateV2(String pluginName, in String[] name, in String[] shortName, in String[] modeAndPID, in String[] equation, in float[] minValue, in float[] maxValue, in String[] units, in String[] header,  in String[] startDiagnostic, in String[] stopDiagnostic);
++
++
++   /**
++    * This retrieves the last PID that torque read from the adapter in RAW form (as the adapter sent it) 'NOT READY' may be returned
++    * if the adapter has not yet retrieved that PID. The OBDCommand should be as sent to the adpater (no spaces - eg: '010D')
++    *
++    * Despite the name, this cannot be used to send commands directly to the adapter, use the sendCommandGetResponse(...) method if
++    * you require direct access, with the exclusive lock command if you will be sending several commands or changing the adapter mode
++    */
++    String[] getPIDRawResponse(String OBDCommand);
++
++    /**
++     * Get the protocol being used (or 0 if not currently connected) - the protocol number is as per the ELM327 documentation
++     */
++     int getProtocolNumber();
++
++    /**
++     * Get the protocol name being used (or AUTO if not currently connected)
++     */
++     String getProtocolName();
++
++     /**
++      * Used by the dash tracker plugin, NON PUBLIC DO NOT USE SUBJECT TO CHANGE.
++      */
++     boolean setCurrentDashboard(String dashboardName, int hashKey);
++
++     /**
++      * Same as listAllPIDs except it returns detected sensors as well (these are generally not available as PIDs, but are sensors discovered in the course of talking to
++      * the vehicle ECU (usually from other ECUs replying)
++      */
++     String[] listAllPIDsIncludingDetectedPIDs();
++
++     /**
++      * Retrieve a setting from the app. NON PUBLIC DO NOT USE SUBJECT TO CHANGE.
++      */
++     String getSettingString(String setting, String def);
++
++     /**
++      * Retrieve a setting from the app. NON PUBLIC DO NOT USE SUBJECT TO CHANGE.
++      */
++     boolean getSettingBoolean(String setting, boolean def);
++
++     /**
++      * Retrieve a setting from the app. NON PUBLIC DO NOT USE SUBJECT TO CHANGE.
++      */
++     long getSettingLong(String setting, long def);
++
++     /**
++      * Retrieve a setting from the app. NON PUBLIC DO NOT USE SUBJECT TO CHANGE.
++      */
++     int getSettingInt(String setting, int def);
++
++     /**
++      * Get the theme type (day/night)  NON PUBLIC DO NOT USE SUBJECT TO CHANGE.
++      */
++     String getThemeType();
++
++     /**
++      * Calibrate the accelerometer for the current device angle
++      */
++     boolean calibrateAccelerometer();
++
++     /**
++      * Get the current theme files as a URIs so we can get at it using content providers.
++      *
++      * @param callingPackageName is the name of your package - eg 'my.someapp.stuff' so that uri permissions can be correctly granted
++      */
++     String[] getCurrentThemeUri(String callingPackageName);
++
++    /**
++     * Sends a list of themes (one per call) to Torque (which will remember them until it is quit or
++     * restarted or sends out another THEME_QUERY broadcast)
++     *
++     * Make sure your FileProvider for the file Uris is setup correctly, do not forget to grant read
++     * only permission. If the user selects the theme then torque will pull the file uris and copy
++     * to local (to the app) storage
++     *
++     * returns true if successful, false if not.
++     */
++     boolean putThemeData(String packageName, String themeName, String description, String author, String thumbnailUri, in String[] themeFileUris);
++
++    /**
++     * Return the current value only for the PID (or PIDs if you pass more than one)
++     *
++     * Use this method to frequently get the value of PID(s).  Be aware that the more PIDs you request, the slower the update speed (as the OBD2 adapter will require to update more PIDs and this is the choke-point)
++     * This method is asynchronous updates via the adapter
++     */
++    double[] getPIDValuesAsDouble(in String[] pidsToRetrieve);
++
++
++    /**
++     * Gets the current header in use (or null if no specific header has been set and the adapter default is being used)
++     */
++    String getCurrentHeader();
++
++    /**
++     * Utility method to ease the recombination of multiple CAN/etc frames from multiple ECUs
++     *
++     * Basically put your response[] from sendCommandGetResponse() here and it will be combined from
++     * several ECU responses into one coherent response (or more if more than one ECU responded).
++     * Also handles out-of-order responses.
++     */
++    String[] recombineResponses(in String[] rawResponsesFromECU);
++
++
++    /**
++     * Returns true if Torque is using headers enabled (ATH1) with this connection
++     */
++    boolean areHeadersEnabled();
++
++
++    /**
++     * Captures frames directly using the AT MA command - useful for CANBUS systems
++     *
++     * time - the time to wait whilst capturing in milliseconds. A value of 50ms should be enough
++     * for every adapter type without causing the buffers to become full on fast systems.
++     *
++     * returns an empty string if nothing was captured or the adapter was not in the correct state (still connecting to ECU, etc)
++     */
++    String[] captureFrames(int time);
++ }
+\ No newline at end of file
+diff --git a/feature_rpc_base/src/main/java/com/my/kizzy/feature_rpc_base/services/CustomRpcService.kt b/feature_rpc_base/src/main/java/com/my/kizzy/feature_rpc_base/services/CustomRpcService.kt
+index 3e2f392..5cbcc2b 100644
+--- a/feature_rpc_base/src/main/java/com/my/kizzy/feature_rpc_base/services/CustomRpcService.kt
++++ b/feature_rpc_base/src/main/java/com/my/kizzy/feature_rpc_base/services/CustomRpcService.kt
+@@ -27,8 +27,13 @@ import com.my.kizzy.feature_rpc_base.setLargeIcon
+ import com.my.kizzy.resources.R
+ import dagger.hilt.android.AndroidEntryPoint
+ import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.Job
+ import kotlinx.coroutines.cancel
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.isActive
+ import kotlinx.coroutines.launch
++import kotlinx.coroutines.withContext
+ import kotlinx.serialization.json.Json
+ import javax.inject.Inject
+ 
+@@ -36,6 +41,8 @@ import javax.inject.Inject
+ class CustomRpcService : Service() {
+     private var rpcData: RpcConfig? = null
+     private var wakeLock: WakeLock? = null
++    private var liveJob: Job? = null
++    private var torqueReader: TorqueReader? = null
+ 
+     @Inject
+     lateinit var kizzyRPC: com.my.kizzy.data.rpc.KizzyRPC
+@@ -58,6 +65,9 @@ class CustomRpcService : Service() {
+             string?.let {
+                 rpcData = Json.decodeFromString(it)
+             }
++            // Keep the profile as typed (with {speed} / {rpm} placeholders) and show "--" until live data arrives
++            val template = rpcData
++            rpcData = template?.let { cfg -> LiveTemplate.resolveConfig(cfg, null, null) }
+ 
+             val stopIntent = Intent(this, CustomRpcService::class.java)
+             stopIntent.action = Constants.ACTION_STOP_SERVICE
+@@ -114,11 +124,43 @@ class CustomRpcService : Service() {
+                     }
+                 }
+             }
++            // Live values from Torque: refresh the placeholders every few seconds
++            liveJob?.cancel()
++            torqueReader?.unbind()
++            torqueReader = null
++            template?.let { cfg ->
++                if (LiveTemplate.usesLive(cfg)) {
++                    val reader = TorqueReader(this)
++                    torqueReader = reader
++                    reader.bind()
++                    liveJob = scope.launch {
++                        var lastSent = ""
++                        while (isActive) {
++                            delay(LIVE_INTERVAL_MS)
++                            val (speed, rpm) = withContext(Dispatchers.IO) { reader.read() }
++                            val live = LiveTemplate.resolveConfig(cfg, speed, rpm)
++                            val key = listOf(live.name, live.details, live.state, live.largeText, live.smallText).joinToString("|")
++                            if (key != lastSent) {
++                                lastSent = key
++                                kizzyRPC.updateLiveText(
++                                    name = live.name,
++                                    details = live.details,
++                                    state = live.state,
++                                    largeText = live.largeText,
++                                    smallText = live.smallText
++                                )
++                            }
++                        }
++                    }
++                }
++            }
+         }
+         return super.onStartCommand(intent, flags, startId)
+     }
+ 
+     override fun onDestroy() {
++        liveJob?.cancel()
++        torqueReader?.unbind()
+         scope.cancel()
+         kizzyRPC.closeRPC()
+         wakeLock?.let {
+@@ -133,5 +175,7 @@ class CustomRpcService : Service() {
+ 
+     companion object {
+         const val WAKELOCK = "kizzy:CustomRPC"
++        // Discord throttles presence updates, so don't go much faster than this
++        const val LIVE_INTERVAL_MS = 15_000L
+     }
+ }
+diff --git a/feature_rpc_base/src/main/java/com/my/kizzy/feature_rpc_base/services/TorqueReader.kt b/feature_rpc_base/src/main/java/com/my/kizzy/feature_rpc_base/services/TorqueReader.kt
+new file mode 100644
+index 0000000..c50aef5
+--- /dev/null
++++ b/feature_rpc_base/src/main/java/com/my/kizzy/feature_rpc_base/services/TorqueReader.kt
+@@ -0,0 +1,93 @@
++package com.my.kizzy.feature_rpc_base.services
++
++import android.content.ComponentName
++import android.content.Context
++import android.content.Intent
++import android.content.ServiceConnection
++import android.os.IBinder
++import com.my.kizzy.domain.model.rpc.RpcConfig
++import org.prowl.torque.remote.ITorqueService
++
++/**
++ * Reads live values from the Torque Pro app through its plugin service (AIDL),
++ * the same way the AA Torque app does. Torque must be running and connected to the car.
++ */
++class TorqueReader(private val context: Context) {
++    @Volatile
++    private var torque: ITorqueService? = null
++    private var bound = false
++
++    private val connection = object : ServiceConnection {
++        override fun onServiceConnected(name: ComponentName, service: IBinder) {
++            torque = ITorqueService.Stub.asInterface(service)
++        }
++
++        override fun onServiceDisconnected(name: ComponentName) {
++            torque = null
++        }
++    }
++
++    fun bind() {
++        if (bound) return
++        val intent = Intent()
++        intent.setClassName("org.prowl.torque", "org.prowl.torque.remote.TorqueService")
++        bound = try {
++            context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
++        } catch (e: Exception) {
++            false
++        }
++    }
++
++    fun unbind() {
++        if (bound) {
++            try {
++                context.unbindService(connection)
++            } catch (_: Exception) {
++            }
++            bound = false
++        }
++        torque = null
++    }
++
++    /** Returns (speed, rpm). A value is null when Torque is not available or not connected to the car. */
++    fun read(): Pair<Double?, Double?> {
++        val service = torque ?: return Pair(null, null)
++        return try {
++            if (!service.isConnectedToECU()) return Pair(null, null)
++            val values = service.getPIDValuesAsDouble(arrayOf(PID_SPEED, PID_RPM))
++            Pair(values.getOrNull(0), values.getOrNull(1))
++        } catch (e: Exception) {
++            Pair(null, null)
++        }
++    }
++
++    companion object {
++        // Same PID ids that AA Torque uses by default ("<pid>,<display index>")
++        const val PID_SPEED = "0d,0"
++        const val PID_RPM = "0c,0"
++    }
++}
++
++/** Placeholders that can be used in the text fields of a Custom RPC profile. */
++object LiveTemplate {
++    const val SPEED = "{speed}"
++    const val RPM = "{rpm}"
++
++    fun hasLive(text: String?): Boolean =
++        text != null && (text.contains(SPEED) || text.contains(RPM))
++
++    fun usesLive(cfg: RpcConfig): Boolean =
++        listOf(cfg.name, cfg.details, cfg.state, cfg.largeText, cfg.smallText).any { hasLive(it) }
++
++    fun resolve(text: String, speed: Double?, rpm: Double?): String =
++        text.replace(SPEED, speed?.let { Math.round(it).toString() } ?: "--")
++            .replace(RPM, rpm?.let { Math.round(it).toString() } ?: "--")
++
++    fun resolveConfig(cfg: RpcConfig, speed: Double?, rpm: Double?): RpcConfig = cfg.copy(
++        name = resolve(cfg.name, speed, rpm),
++        details = resolve(cfg.details, speed, rpm),
++        state = resolve(cfg.state, speed, rpm),
++        largeText = resolve(cfg.largeText, speed, rpm),
++        smallText = resolve(cfg.smallText, speed, rpm),
++    )
++}
